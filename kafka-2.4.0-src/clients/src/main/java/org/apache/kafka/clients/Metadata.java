@@ -60,10 +60,13 @@ import java.util.function.Supplier;
  * manage topics while producers rely on topic expiry to limit the refresh set.
  *
  * Cluster 对象的封装
+ * Metadata中的字段可以由主线程读、Sender线程更新，所以其所有方法都使用 synchronize 同步
  *
  */
 public class Metadata implements Closeable {
     private final Logger log;
+
+    // 与重试相关，两次发出更新Cluster元数据信息的最小时间差
     private final long refreshBackoffMs;
     private final long metadataExpireMs;
 
@@ -82,6 +85,8 @@ public class Metadata implements Closeable {
     private Set<String> unauthorizedTopics;
     private MetadataCache cache = MetadataCache.empty();
     private boolean needUpdate;
+
+    // 在更新 cluster 之前，通知所有 Listener
     private final ClusterResourceListeners clusterResourceListeners;
     private boolean isClosed;
     private final Map<TopicPartition, Integer> lastSeenLeaderEpochs;
@@ -150,6 +155,7 @@ public class Metadata implements Closeable {
 
     /**
      * Request an update of the current cluster metadata info, return the current updateVersion before the update
+     * 请求更新，将 needUpdate 设置开启，这样Sender线程运行时会更新集群的元数据，然后返回version值
      */
     public synchronized int requestUpdate() {
         this.needUpdate = true;

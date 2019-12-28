@@ -15,11 +15,12 @@
 
 ## 项目进度
 
-| 内容                | 描述         | 进度  |
-| ------------------- | ------------ | ----- |
-| Producer            | 生产者接口   | ★★☆☆☆ |
-| KafkaProducer       | 生产者       | ★☆☆☆☆ |
-| ProducerInterceptor | 生产者拦截器 | ★★☆☆☆ |
+| 内容                                                   | 描述         | 进度  |
+| ------------------------------------------------------ | ------------ | ----- |
+| Producer                                               | 生产者接口   | ★★☆☆☆ |
+| KafkaProducer                                          | 生产者       | ★☆☆☆☆ |
+| ProducerInterceptor                                    | 生产者拦截器 | ★★☆☆☆ |
+| Metadata、Cluster、Node、TopicPartition、PartitionInfo | 集群元数据   | ★☆☆☆☆ |
 
 
 
