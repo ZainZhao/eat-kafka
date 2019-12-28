@@ -31,6 +31,11 @@ import java.util.Set;
 
 /**
  * An immutable representation of a subset of the nodes, topics, and partitions in the Kafka cluster.
+ * 集群的元数据
+ *
+ * 值得注意： Node、TopicPartion、PartitionInfo、Cluster 的所有字段都是private final修饰的，且只提供了查询方法，并未提供任何修改方法
+ * 这就保证了其实不可变对象，即线程安全
+ *
  */
 public final class Cluster {
 
@@ -41,7 +46,11 @@ public final class Cluster {
     private final Set<String> internalTopics;
     private final Node controller;
     private final Map<TopicPartition, PartitionInfo> partitionsByTopicPartition;
+
+    // 这里的分区不一定有 Leader 副本。
     private final Map<String, List<PartitionInfo>> partitionsByTopic;
+
+    // 注意：这里存放的分区必须是有 Leader 副本的。因为某些中间状态，例如 Leader 副本宕机而出发的选举过程中，分区不一定有 Leader 副本
     private final Map<String, List<PartitionInfo>> availablePartitionsByTopic;
     private final Map<Integer, List<PartitionInfo>> partitionsByNode;
     private final Map<Integer, Node> nodesById;

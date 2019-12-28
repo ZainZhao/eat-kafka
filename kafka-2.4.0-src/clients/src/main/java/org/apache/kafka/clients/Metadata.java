@@ -58,13 +58,23 @@ import java.util.function.Supplier;
  * If topic expiry is enabled for the metadata, any topic that has not been used within the expiry interval
  * is removed from the metadata refresh set after an update. Consumers disable topic expiry since they explicitly
  * manage topics while producers rely on topic expiry to limit the refresh set.
+ *
+ * Cluster 对象的封装
+ *
  */
 public class Metadata implements Closeable {
     private final Logger log;
     private final long refreshBackoffMs;
     private final long metadataExpireMs;
+
+    /*
+    *  在 版本 0.10.0 中version字段表示集群的版本号
+    *  每更新一次，自增1。
+    *  通过新旧版本号的比较，判断集群元数据是否更新完成
+    * */
     private int updateVersion;  // bumped on every metadata response
     private int requestVersion; // bumped on every new topic addition
+
     private long lastRefreshMs;
     private long lastSuccessfulRefreshMs;
     private KafkaException fatalException;
