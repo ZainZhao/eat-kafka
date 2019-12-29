@@ -38,11 +38,13 @@ import java.util.Objects;
  * A {@link Records} implementation backed by a ByteBuffer. This is used only for reading or
  * modifying in-place an existing buffer of record batches. To create a new buffer see {@link MemoryRecordsBuilder},
  * or one of the {@link #builder(ByteBuffer, byte, CompressionType, TimestampType, long)} variants.
+ * MemoryRecords 才是消息最终存放的地方
  */
 public class MemoryRecords extends AbstractRecords {
     private static final Logger log = LoggerFactory.getLogger(MemoryRecords.class);
     public static final MemoryRecords EMPTY = MemoryRecords.readableRecords(ByteBuffer.allocate(0));
 
+    // 用于保存消息数据的 NIO ByteBuffer
     private final ByteBuffer buffer;
 
     private final Iterable<MutableRecordBatch> batches = this::batchIterator;

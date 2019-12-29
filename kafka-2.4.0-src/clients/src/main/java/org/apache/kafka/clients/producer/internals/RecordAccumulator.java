@@ -63,6 +63,10 @@ import org.slf4j.Logger;
  * <p>
  * The accumulator uses a bounded amount of memory and append calls will block when that memory is exhausted, unless
  * this behavior is explicitly disabled.
+ * KafkaProducer 同步和异步两种方式底层实现相同，都是通过异步方式实现的。
+ * 业务线程调用KafkaProducer.send()方法，将消息缓存在RecordAccumulator中，就返回了。当达到一定条数后，会唤醒Sender线程发送RecordAccumulator中的消息。
+ * 上述过程涉及两个线程，所以必须是线程安全的
+ *
  */
 public final class RecordAccumulator {
 
@@ -71,6 +75,8 @@ public final class RecordAccumulator {
     private final AtomicInteger flushesInProgress;
     private final AtomicInteger appendsInProgress;
     private final int batchSize;
+
+    // 压缩器，对消息数据进行压缩，将压缩后的数据输出到 buffer
     private final CompressionType compression;
     private final int lingerMs;
     private final long retryBackoffMs;
