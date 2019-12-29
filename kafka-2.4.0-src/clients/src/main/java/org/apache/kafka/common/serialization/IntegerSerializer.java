@@ -20,7 +20,7 @@ public class IntegerSerializer implements Serializer<Integer> {
     public byte[] serialize(String topic, Integer data) {
         if (data == null)
             return null;
-
+        // 同 hash 类似，一般直接 移位
         return new byte[] {
             (byte) (data >>> 24),
             (byte) (data >>> 16),

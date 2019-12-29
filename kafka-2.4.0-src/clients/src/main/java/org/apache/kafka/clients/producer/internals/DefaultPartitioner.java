@@ -32,6 +32,8 @@ import org.apache.kafka.common.utils.Utils;
  * <li>If no partition or key is present choose the sticky partition that changes when the batch is full.
  * 
  * See KIP-480 for details about sticky partitioning.
+ *
+ *  分区器默认实现
  */
 public class DefaultPartitioner implements Partitioner {
 
@@ -50,13 +52,14 @@ public class DefaultPartitioner implements Partitioner {
      * @param cluster The current cluster metadata
      */
     public int partition(String topic, Object key, byte[] keyBytes, Object value, byte[] valueBytes, Cluster cluster) {
-        if (keyBytes == null) {
+        if (keyBytes == null) {   // 无 key
             return stickyPartitionCache.partition(topic, cluster);
         } 
         List<PartitionInfo> partitions = cluster.partitionsForTopic(topic);
         int numPartitions = partitions.size();
         // hash the keyBytes to choose a partition
-        return Utils.toPositive(Utils.murmur2(keyBytes)) % numPartitions;
+        // 有key 使用 murmur2 这种高效率低碰撞的Hash算法
+        return Utils.toPositive(Utils.murmur2(keyBytes)) % numPartitions;  // 实现负载均衡
     }
 
     public void close() {}

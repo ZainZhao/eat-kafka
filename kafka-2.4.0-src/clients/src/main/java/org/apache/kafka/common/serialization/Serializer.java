@@ -29,6 +29,8 @@ import java.util.Map;
  * Implement {@link org.apache.kafka.common.ClusterResourceListener} to receive cluster metadata once it's available. Please see the class documentation for ClusterResourceListener for more information.
  *
  * @param <T> Type to be serialized from.
+ *
+ *   序列化接口
  */
 public interface Serializer<T> extends Closeable {
 
@@ -36,6 +38,7 @@ public interface Serializer<T> extends Closeable {
      * Configure this class.
      * @param configs configs in key/value pairs
      * @param isKey whether is for key or value
+     *    在执行序列化操作之前的配置
      */
     default void configure(Map<String, ?> configs, boolean isKey) {
         // intentionally left blank
@@ -57,6 +60,8 @@ public interface Serializer<T> extends Closeable {
      * @param headers headers associated with the record
      * @param data typed data
      * @return serialized bytes
+     *
+     *  注意该接口的这个方法用了 default ，子类可继承
      */
     default byte[] serialize(String topic, Headers headers, T data) {
         return serialize(topic, data);

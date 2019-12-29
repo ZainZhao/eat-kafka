@@ -355,6 +355,7 @@ public class AbstractConfig {
             log.warn("The configuration '{}' was supplied but isn't a known config.", key);
     }
 
+
     private <T> T getConfiguredInstance(Object klass, Class<T> t, Map<String, Object> configPairs) {
         if (klass == null)
             return null;

@@ -21,6 +21,10 @@
 | KafkaProducer                                          | 生产者       | ★☆☆☆☆ |
 | ProducerInterceptor                                    | 生产者拦截器 | ★★☆☆☆ |
 | Metadata、Cluster、Node、TopicPartition、PartitionInfo | 集群元数据   | ★☆☆☆☆ |
+| Serializer 、Deserializer                              | 序列化       | ★☆☆☆☆ |
+| Patitioner、DefaultPartitioner                         | 分区器       | ★★☆☆☆ |
+
+
 
 
 

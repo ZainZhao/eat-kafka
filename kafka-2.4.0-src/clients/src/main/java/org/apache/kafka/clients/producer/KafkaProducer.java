@@ -1040,17 +1040,24 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * @param maxWaitMs The maximum time in ms for waiting on the metadata
      * @return The cluster containing topic metadata and the amount of time we waited in ms
      * @throws KafkaException for all Kafka-related exceptions, including the case where this method is called after producer close
+     *
+     *  负责触发kafka集群元数据的更新，并阻塞主线程等待更新完毕
+     *
+     *
      */
     private ClusterAndWaitTime waitOnMetadata(String topic, Integer partition, long maxWaitMs) throws InterruptedException {
         // add topic to metadata topic list if it is not there already and reset expiry
         Cluster cluster = metadata.fetch();
 
+        // 检查 无效Topic集合中 是否包含该topic
         if (cluster.invalidTopics().contains(topic))
-            throw new InvalidTopicException(topic);
+            throw new InvalidTopicException(topic);  // 包含则抛出异常
 
         metadata.add(topic);
 
+        // 获取分区数量
         Integer partitionsCount = cluster.partitionCountForTopic(topic);
+
         // Return cached metadata if we have it, and if the record's partition is either undefined
         // or within the known partition range
         if (partitionsCount != null && (partition == null || partition < partitionsCount))
@@ -1068,12 +1075,18 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             } else {
                 log.trace("Requesting metadata update for topic {}.", topic);
             }
+
             metadata.add(topic);
+
+            // 设置 needUpdate ,获取当前元数据版本号
             int version = metadata.requestUpdate();
-            sender.wakeup();
+            sender.wakeup();  // 唤醒sender线程
             try {
+
+                // 阻塞等待元数据更新完毕
                 metadata.awaitUpdate(version, remainingWaitMs);
-            } catch (TimeoutException ex) {
+
+            } catch (TimeoutException ex) {   // 抛出超时异常
                 // Rethrow with original maxWaitMs to prevent logging exception with remainingWaitMs
                 throw new TimeoutException(
                         String.format("Topic %s not present in metadata after %d ms.",
@@ -1081,7 +1094,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
             }
             cluster = metadata.fetch();
             elapsed = time.milliseconds() - begin;
-            if (elapsed >= maxWaitMs) {
+            if (elapsed >= maxWaitMs) {   // 检测超时时间
                 throw new TimeoutException(partitionsCount == null ?
                         String.format("Topic %s not present in metadata after %d ms.",
                                 topic, maxWaitMs) :
@@ -1308,6 +1321,7 @@ public class KafkaProducer<K, V> implements Producer<K, V> {
      * computes partition for given record.
      * if the record has partition returns the value otherwise
      * calls configured partitioner class to compute the partition.
+     * 在KafkaProducer.partition() 方法中，优先根据ProducerRecord中partition字段指定的序号选择分区，如果没有明确指定，则通过Partitioner.partition()方法选择Partition。
      */
     private int partition(ProducerRecord<K, V> record, byte[] serializedKey, byte[] serializedValue, Cluster cluster) {
         Integer partition = record.partition();

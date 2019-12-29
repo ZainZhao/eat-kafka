@@ -23,6 +23,8 @@ import java.io.Closeable;
 
 /**
  * Partitioner Interface
+ *  分区器接口
+ *
  */
 
 public interface Partitioner extends Configurable, Closeable {
