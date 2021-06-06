@@ -169,17 +169,119 @@ Kafka线上部署需要考虑些什么？
 
 
 
+## 原理篇（一） 生产者
+
+- 为什么分区？
+
+```markdown
+- 提供负载均衡的能力，实现系统的高伸缩性（Scalability）
+	- 主题下的每条消息只会保存在某一个分区中，不同的分区能够被放置到不同节点的机器上
+	- 数据的读写操作也是针对分区这个粒度而进行的
+	- 添加新的节点机器可以增加吞吐量
+    
+- 利用分区也可以实现其他一些业务需求，比如实现业务级别的消息顺序问题 
+```
+
+- Kafka都有哪些分区策略？
+
+```markdown
+- 分区策略是决定生产者将消息发送到哪个分区的算法,避免造成数据“倾斜”
+
+- Kafka提供了默认的分区策略，同时也支持自定义的分区策略
+	- 自定义分区策略（限制配置生产者端的参数 partitioner.class,编写一个具体的类实现org.apache.kafka.clients.producer.Partitioner接口）：基于地理分区
+    - 轮询策略（Round-robin）
+    - 随机策略（Randomness）
+    - 按消息键保序策略（Key-ordering）：保证同一个 Key 的所有消息都进入到相同的分区里
+
+- 默认分区策略：如果指定了 Key，那么默认实现按消息键保序策略；如果没有指定 Key，则使用轮询策略。
+```
+
+- Kafka的消息格式？(toto)
+
+```markdown
+- v1：message & message set
+    - 每一个消息都会有CRC校验
+    
+- v2：record item & reocrd batch
+	- 0.11.0.0引入
+	- 把消息的公共部分抽取出来放到外层消息集合里面（去冗余）
+```
+
+![image-20210606155543513](pic\message_v1.png)
+
+- 何时压缩？
+
+```markdown
+- 生产者端：通过compression.type制定压缩算法
+
+- Broker
+	- 大部分情况下 ,接收到消息之后是原封不动保存的
+	- 两种例外重新压缩消息
+		Broker端指定了和Producer端不同的压缩算法（Broker 端也有一个参数叫 compression.type。默认值是 producer）
+		Broker端发生了消息格式转换（兼容，丧失了zero copy）
+
+- CPU资源需要很充足，带宽有限也建议压缩
+```
+
+- 何时解压缩？
+
+```markdown
+- 消费者端
+	- 生产者或者Broker会将启用了哪种压缩算法封装进消息集合中
+	
+- Broker
+	- 每个压缩过的消息集合在Broker端写入时都要发生解压缩操作，为了对消息执行各种验证
+	- 在写入broker时进行解压缩，对zero copy应该没有影响
+```
+
+- Kafka支持哪些压缩算法？
+
+```markdown
+- 评判标准
+吞吐量：LZ4 > Snappy > zstd 和 GZIP
+压缩比：zstd > LZ4 > GZIP > Snappy
+
+- 2.1.0之后才支持 Zstandard(zstd)
+```
+
+- Kafka为何基于TCP连接？
+
+```markdown
+- 能够利用TCP的某些高级功能
+	- 多路复用：在一条物理连接上创建若干个虚拟连接
+	
+- 目前已知的 HTTP 库在很多编程语言中都略显简陋
+```
+
+- 生产者何时创建TCP连接？
+
+```markdown
+- 获取元数据
+	- 在Producer实例启动时，Producer会在后台创建并启动一个Sender线程，该线程开始运行时会创建与Broker的连接
+	- 不调用send方法，这个producer不知道给哪个主题发消息，所以sender会先连接boostrap.servers参数指定的所有Broker（配置几台即可）
+	- 一旦连接到集群中的任一一台Broker，会发送一个 METADATA请求，就能拿到整个集群的元数据
+	
+- 更新元数据
+	- Producer 通过 metadata.max.age.ms 参数定期地去更新元数据信息（默认五分钟）
+
+- 在消息发送时
+	- 当要发送消息时，Producer发现尚不存在与目标Broker的连接，boostrap与Broker不是同一个
+```
+
+- 生产者何时关闭TCP连接？
+
+```markdown
+- 用户主动关闭
+	- kill -9
+	- producer.close()
+
+- 自动关闭（TCP连接是在Broker端被关闭的，但其实这个TCP连接的发起方是客户端，所以其实也是被动关闭）
+	- Producer 端参数 connections.max.idle.ms
+		- 默认9分钟，如果在 9 分钟内没有任何请求“流过”某个 TCP 连接，那么 Kafka 会主动把该 TCP 连接关闭
+		- -1  只是软件层面的“长连接”机制，还是会准守底层Socket的keepalive探活机制
+```
 
 
-
-
-
-
-
-
-
-- [x] 09 生产者消息分区机制原理剖析
-- [x] 10 生产者压缩算法面面观
 
 
 
@@ -188,4 +290,4 @@ Kafka线上部署需要考虑些什么？
 - 《Apache Kafka源码剖析》
 - 《Kafka 核心技术与实战》
 
-> 资料来源于网络，侵删
+> 资料来源于网络，侵删	
