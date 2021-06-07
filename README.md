@@ -281,6 +281,122 @@ Kafka线上部署需要考虑些什么？
 		- -1  只是软件层面的“长连接”机制，还是会准守底层Socket的keepalive探活机制
 ```
 
+- 消息交付可靠性保障的级别有哪些？
+
+```markdown
+- 最多一次（at most once）
+	- 消息可能会丢失，但绝不会被重复发送。让 Producer 禁止重试。
+	
+- 至少一次（at least once）
+	- 消息不会丢失，但有可能被重复发送。（默认）
+	- 通过参数设置，可以保证
+	- 只有Broker成功接收消息且Producer接到Broker的应答才会认为该消息成功发送
+	  倘若消息成功接收到，但 Broker 的应答没有成功发送回 Producer 端（比如网络出现瞬时抖动）
+	  那么 Producer 就无法确定消息是否真的提交成功了
+	  因此，Producer只能选择重试，再次发送相同的消息，这就会导致消息重复发送
+
+- 精确一次（exactly once）
+	- 消息不会丢失，也不会被重复发送
+```
+
+- 什么是幂等性？
+
+```markdown
+- 操作或函数能够被执行多次，但每次得到的结果都是不变的，比如让数字乘以1
+ 
+- 优点可以安全地重试任何幂等性操作，不会破坏系统状态
+```
+
+- 什么是幂等Producer?
+
+```markdown
+- 0.11.0.0 版本引入 props.put(“enable.idempotence”, ture) 或props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG， true)
+
+- 原理（自动消息去重）
+	- 用空间去换时间的优化思路，即在Broker端占用内存，多保存一些字段
+	- 当 Producer 发送了具有相同字段值的消息后，Broker 能够自动知晓这些消息已经重复了，于是可以在后台默默地把它们“丢弃”掉
+
+- 限制
+	- 只能保证单分区上的幂等性。一个幂等性 Producer 能够保证某个主题的一个分区上不出现重复消息（todo，轮询难道不应该发送消息到多个分区吗？）
+	- 只能实现单会话上的幂等性，不能实现跨会话的幂等性。
+```
+
+- 什么是事务Rroducer?
+
+```markdown
+- 事务 （自 0.11 版本开始也提供了对事务的支持），开启 enable.idempotence = true
+
+- 在 read committed 隔离级别上做事情。当读取数据库时，你只能看到已提交的数据，即无脏读。同时，当写入数据库时，你也只能覆盖掉已提交的数据，即无脏写
+
+- 保证Producer多条消息原子性地写入到目标分区，同时也能保证 Consumer 只能看到事务成功提交的消息（Consumer相应设置isolation.level为read_committed）
+
+- 保证跨分区、跨会话间的幂等性
+```
+
+
+
+---------草稿
+
+## 原理篇（二） 消费者
+
+- 什么是消费者组？
+
+```markdown
+- 传统的“消息队列”的问题
+	- 点对点模式，消息只能被下游的一个consumer消费(伸缩性差)
+	- 发布 / 订阅模型，因为每个订阅者都必须要订阅主题的所有分区
+
+- Consumer Group 是 Kafka 提供的可扩展且具有容错性的消费者机制
+	- 多个消费者实例共享一个公共Group ID，组内的所有消费者协调在一起来消费订阅主题的所有分区。
+	- 每个分区只能由同一个消费者组内的一个Consumer实例来消费。每个实例不要求一定要订阅主题的所有分区，它只会消费部分分区中的消息。
+```
+
+- 怎么管理消费位移？
+
+```markdown
+- 消费者在消费的过程中需要记录自己消费的位置信息
+	- 对于 Consumer Group 而言，它是一组 KV 对，Key 是分区，V 对应 Consumer 消费该分区的最新位移。
+	
+- 老版本：位移保存在 ZooKeeper 中，将服务器节点做成无状态的（提高伸缩性），但ZooKeeper 不适合进行频繁的写更新
+
+- 新版本：将位移保存在 Broker 端内部主题__consumer_offsets中
+```
+
+- 什么是rebalance?
+
+```markdown
+- 协议，规定了一个 Consumer Group 下的所有 Consumer 如何达成一致，来分配订阅 Topic 的每个分区
+- 在 Rebalance 过程中，所有 Consumer 实例都会停止消费，等待 Rebalance 完成。类似JVM垃圾回收机制的万物静止的收集方式（stop the world）
+```
+
+- 何时进行rebalance?
+
+```markdown
+- 组成员数发生变更。新Consumer加入组或者离开组（或者有consumer崩溃被踢出组）
+
+- 订阅主题数发生变更。Consumer Group可以使用正则表达式的方式订阅主题，在 Consumer Group的运行过程中，新创建了一个满足这样条件的主题
+
+- 订阅主题的分区数发生变更
+```
+
+- 怎样进行rebalance?
+
+```markdown
+- 三种分配策略
+	- Range：对同一个主题里面的分区按照序号进行排序。用分区数除以消费者线程数量来判断每个消费者线程消费几个分区。
+	- RoundRobin
+	- Sticky：0.11.X，分配要尽可能的均匀，分配尽可能的与上次分配的保持相同
+
+- 目前 Rebalance 的设计是所有 Consumer 实例共同参与，全部重新分配所有分区。
+	- 最有效的做法还是尽量减少分配方案的变动
+```
+
+
+
+
+
+
+
 
 
 
