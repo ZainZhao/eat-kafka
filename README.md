@@ -391,7 +391,112 @@ Kafka线上部署需要考虑些什么？
 	- 最有效的做法还是尽量减少分配方案的变动
 ```
 
+- Rebalance的弊端？
 
+```markdown
+- 在整个rebalance的过程中，STW让所有实例都不能消费任何信息，对Consumer的TPS影响很大
+
+- Relalance很慢，Group下的Consumer会很多
+
+- Rebalance 效率不高，Group下的所有成员都需要参与进来，而且通常不会考虑局部性原理
+```
+
+- 什么是Coordinator?
+
+```markdown
+- 专门为 Consumer Group 服务，负责为 Group 执行 Rebalance 以及提供位移管理和组成员管理等
+	Consumer提交位移时，其实是向Coordinator所在的Broker提交位移。
+  	Consumer启动时，也是向Coordinator所在的Broker发送各种请求，然后由Coordinator负责执行消费者组的注册、成员管理记录等元数据管理操作
+  
+- 所有 Broker 都会创建和开启相应的Coordinator组件
+```
+
+- Consumer Group 如何确定为它服务的 Coordinator 在哪台 Broker 上呢？
+
+```markdown
+1 先确定由位移主题的哪个分区来保存该Group数据
+	partitionId=Math.abs(groupId.hashCode() % offsetsTopicPartitionCount)
+2 找出该分区Leader副本所在的Broker，该Broker即为对应的Coordinator
+```
+
+- 如何避免rebalance？
+
+```markdown
+- rebalance的时机
+	组成员数量发生变化
+	订阅主题数量发生变化 (运维主动操作)
+	订阅主题的分区数发生变化 (运维主动操作)
+
+- 组成员数量发生变化
+	- 未能及时发送心跳，导致 Consumer 被“踢出”Group 而引发的
+		让其至少能够发送至少 3 轮的心跳请求
+		session.timeout.ms=6s
+		heartbeat.interval.ms = 2s
+
+	- Consumer 消费时间过长导致的
+		- 如果在每次拉取消息之后需要对消息做一定的处理
+			需要把max.poll.interval.ms设置的稍微大一些，预估一下处理消息的最长时间，给业务留下必要的时间(Consumer消费能力过低或者一次性拉取数据过多)
+		- 排查一下Consumer端的GC表现，比如是否因为频繁的Full GC导致Consumer长时间的停顿，而引发非预期的Rebalance
+```
+
+- 如何得知broker rebalance过多？
+
+```markdown
+- Coordinator所在的broker日志，如果经常发生rebalance，会有类似于"(Re)join group" 之类的日志
+```
+
+- 什么是位移主题（__consumer_offsets）?
+
+```markdown
+- 老版本：保存在ZooKeeper中，减少Broker的状态信息，高伸缩性，但ZooKeeper 并不适用于这种高频的写操作
+
+- 新版本：将位移数据作为一条条普通的 Kafka 消息，提交到 __consumer_offsets 中，刚好Kafka自身能够实现高持久性和高频的写操作
+
+	- 为什么不用HashMap存一次然后替换值就行？ 保证顺序IO，高吞吐
+```
+
+- 什么是位移主题有哪些信息?
+
+```markdown
+- 消息格式是Kafka自定义的，用户不能随意修改
+
+- 三类消息
+	保存位移的消息:  key = <Group ID，主题名，分区号>  value = 位移 & 位移相关的元数据
+	保存Consumer Group信息的消息，用来注册Consumer Group
+	删除Group过期位移、删除Group的消息
+```
+
+- 什么时候创建位移主题？
+
+```markdown
+- 当 Kafka 集群中的第一个 Consumer 程序启动时，就会会自动创建位移主题
+	- 分区数：Broker 端参数 offsets.topic.num.partitions，通常来说，同一个group下的所有消费者提交的位移数据保存在同一个分区中
+	- 副本数：offsets.topic.replication.factor
+
+- 也可以在Kafka集群尚未启动任何Consumer之前手动创建
+```
+
+- 什么时候向位移主题写入位移信息呢？
+
+```markdown
+- 自动提交位移：只要Consumer一直启动，就会无限期地向位移主题写入信息，这就需要重复消息删除策略
+	enable.auto.commit = true
+	auto.commit.interval.ms
+
+- 手动提交位移
+	enable.auto.commit = false
+```
+
+- 怎样删除位移主题中的过期消息？
+
+```markdown
+- Compaction（整理机制）：
+	对于同一个 Key 的两条消息 M1 和 M2，如果 M1 的发送时间早于 M2，那么 M1 就是过期消息。
+	Compact 的过程就是扫描日志的所有消息，剔除那些过期的消息，然后把剩下的消息整理在一起。
+
+- 专门的后台线程Log Clean定期地巡检待Compact的主题
+  	如果位移主题无限膨胀占用很多磁盘空间，很有可能就是这个线程挂了
+```
 
 
 
