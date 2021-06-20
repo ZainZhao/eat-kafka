@@ -5,10 +5,6 @@
 >
 > 当然，我也是整理的，资料来源于网络，难免出错，有问题可以 issue
 
-
-
-
-
 ## **基础篇**
 
 什么是消息引擎，消息引擎的作用？
@@ -165,7 +161,23 @@ Kafka线上部署需要考虑些什么？
 	- 提交时间/Flush 落盘时间
 ```
 
+- 目前Kafka有哪些主流的监控框架？
 
+``` markdown
+- JMXTool  社区自带
+
+- Kafka Manager 雅虎，已改名Cluster Manager for Apache Kafka
+
+- Burrow LinkedIn，专门监控消费者进度
+
+- JMXTrans + InfluxDB + Grafana   还可以同时监控其他组件
+
+- Confluent Control Center 付费
+
+- Kafka Eagle
+
+- Logi-KafkaManager 滴滴
+```
 
 
 
@@ -395,10 +407,72 @@ Kafka线上部署需要考虑些什么？
 
 ```markdown
 - 在整个rebalance的过程中，STW让所有实例都不能消费任何信息，对Consumer的TPS影响很大
+	- 能不能参照JVM中的Minor gc和 Major gc
+	- 有些分区就还是由原消费者消费，特别是针对已有主题分区数量变化
 
 - Relalance很慢，Group下的Consumer会很多
 
 - Rebalance 效率不高，Group下的所有成员都需要参与进来，而且通常不会考虑局部性原理
+```
+
+- rebalance是如何通知到其他消费者实例的？
+
+```markdown
+- 靠消费者端的心跳线程
+	- 重平衡的通知机制：Coordinator会将“REBALANCE_IN_PROGRESS”封装进心跳请求的响应中，发还给消费者。当消费者发现心跳响应中包含了“REBALANCE_IN_PROGRESS”，就能立马知道重平衡又开始了
+	
+- consumer需要的定期的发送心跳到Coordinator
+	- 0.10.1.0之前，由消费者主线程完成，也就是写代码调用 KafkaConsumer.poll 方法的那个线程，但是消息处理逻辑也是在这个线程中完成的。因此，一旦消息处理消耗了过长的时间，心跳请求将无法及时发到Coordinator那里，导致Coordinator“错误地”认为该消费者已“死”。
+	- 0.10.1.0开始，一个单独的心跳线程来专门执行心跳请求发送
+```
+
+- 什么是消费者组状态机（消费者组的状态）？
+
+```markdown
+- Empty：组内没有任何成员，但是消费者组可能存在已提交的位移数据或元数据
+- Dead：组内没有任何成员，并且元数据信息已经在Coordinator端移除
+- PreparingRebalance：消费者组准备开启rebalance,此时所有成员都要重新请求加入消费者组
+- CompletingRebalance：消费者组下所有成员已经加入，各个成员正在等待分配方案（老版本叫AwaitingSync）
+- Stable：消费者组的稳定状态，表明已经完成rebalance
+
+一个消费者组最开始是 Empty 状态，当重平衡过程开启后，它会被置于 PreparingRebalance 状态等待成员加入，之后变更到 CompletingRebalance 状态等待分配方案，最后流转到 Stable 状态完成重平衡
+
+当有新成员加入或已有成员退出时，消费者组的状态从 Stable 直接跳到 PreparingRebalance 状态，此时，所有现存成员就必须重新申请加入组
+
+当所有成员都退出组后，消费者组状态变更为 Empty。Kafka 定期自动删除过期位移的条件就是，组要处于 Empty 状态。
+```
+
+<img src="pic\consumer state.png" alt="image-20210619184436035" style="zoom:50%;" />
+
+- 消费者组进行rebalance的流程？
+
+```markdown
+- rebalance的完整流程需要消费者端和协调者组件共同参与才能完成
+
+- 消费者端
+	- 加入组：消费者组的成员会向协调者发送 JoinGroup 请求。在该请求中，每个成员都要将自己订阅的主题上报，这样协调者就能收集到所有成员的订阅信息，一旦收集了全部成员的 JoinGroup 请求后，协调者会从这些成员中选择一个担任这个消费者组的领导者
+		- 通常情况下，第一个发送 JoinGroup 请求的成员自动成为领导者
+		- 领导者消费者的任务是收集所有成员的订阅信息，然后根据这些信息，制定具体的分区消费分配方案
+		- 选出领导者之后，协调者会把消费者组订阅信息封装进 JoinGroup 请求的响应体中，然后发给领导者，由领导者统一做出分配方案
+	- 等待领导者消费者（Leader Consumer）分配方案
+		- 领导者向协调者发送 SyncGroup 请求，将刚刚做出的分配方案发给协调者，其他成员也会向协调者发送 SyncGroup 请求，只不过请求体中并没有实际的内容
+		- 协调者接收分配方案，然后统一以 SyncGroup 响应的方式分发给所有成员，当所有成员都成功接收到分配方案后，消费者组进入到 Stable 状态，即开始正常的消费工作
+```
+
+- Coordinator配合Rebalance的场景和流程？
+
+```markdown
+- 场景一：新成员入组
+	当协调者收到新的 JoinGroup 请求后，它会通过心跳请求响应的方式通知组内现有的所有成员，强制它们开启新一轮的重平衡。
+
+- 场景二：组成员主动离组
+	消费者实例所在线程或进程调用 close() 主动通知协调者它要退出。协调者收到 LeaveGroup 请求后，依然会以心跳响应的方式通知其他成员准备开始rebalance
+
+- 场景三：组成员崩溃离组
+	消费者实例出现严重故障，突然宕机导致的离组。被动的，协调者通常需要等待一段时间才能感知到，这段时间一般是由消费者端参数 session.timeout.ms 控制的
+
+- 场景四：rebalance时协调者对组内成员提交位移的处理
+	每个组内成员都会定期汇报位移给协调者。当rebalance开启时，协调者会给予成员一段缓冲时间，要求每个成员必须在这段时间内快速地上报自己的位移信息，然后再开启正常的 JoinGroup/SyncGroup 请求发送
 ```
 
 - 什么是Coordinator?
@@ -498,9 +572,250 @@ Kafka线上部署需要考虑些什么？
   	如果位移主题无限膨胀占用很多磁盘空间，很有可能就是这个线程挂了
 ```
 
+- consumer位移提交的分类？
+
+```markdown
+- 用户角度
+	- 自动提交
+		enable.auto.commit=true
+		auto.commit.interval.ms
+		poll方法会先提交上一批消息的位移，再处理下一批消息，因此能保证不出现消费丢失的情况，但是会出现消费重复的情况
+	
+	- 手动提交
+		KafkaConsumer#commitSync() 同步
+		KafkaConsumer#commitAsync() 异步
+		消费者 poll 方法内部维护一个不可见的指针，commitAysnc 方法异步提交不管是否成功，poll 仍然能根据自己维护的指针位移消费数据，最后在finally内用同步方法， 同步最新的位移。		
+		结合异步&同步：对于常规性、阶段性的手动提交，调用 commitAsync() 避免程序阻塞，而在 Consumer 要关闭前，调用 commitSync() 方法执行同步阻塞式的位移提交，以确保 Consumer 关闭前能够保存正确的位移数据。
+
+- Consumer角度：同步提交&异步提交
+```
+
+- 什么是细粒度的位移提交？
+
+```markdown
+- poll方法返回很多消息，肯定不希望所有消息都处理完之后再提交，一旦出现差错，之前处理的全部都要再重来一遍
+	类似于数据库中的事务处理，希望将大事务分隔为若干个小事务分别提交
+
+- 手动消费一定位移就提交一次
+```
+
+- 为什么手动提交位移也不能避免消息重复消费？
+
+```markdown
+- 假设 Consumer 在处理完消息和提交位移前这段时间出现故障，下次重启后依然会出现消息重复消费的情况
+
+- 业务中怎么进行去重呢？
+  主要还是依赖于业务代码
+  设置特别的业务字段，用于标识消息的id，再次遇到相同id则直接确认消息
+  将业务逻辑设计为幂等，即使发生重复消费，也能保证一致性
+```
+
+- 什么是CommitFailedException？怎样防止发生？
+
+```markdown
+- 手动提交位移时KafkaConsumer.commitSync()，出现了不可恢复的严重异常
+  消息处理的总时间超过预设的 max.poll.interval.ms 参数值时会发生
+  
+- 处理办法
+	- 缩短单条消息处理的时间，优化下游的逻辑是最不容易出错的
+	- 权衡TPS和消费延时
+		增加consumer消费下一批消息的时长间隔 max.poll.interval.ms
+		减少一次性消费信息的总数 max.poll.records
+	- 下游系统使用多线程来加速消费
+		让下游系统手动创建多个消费线程处理 poll 方法返回的一批消息
+		但是多个线程在如何处理位移提交上容易出错
+```
+
+- Java Consumer是怎样设计的？
+
+```markdown
+- 从 Kafka 0.10.1.0 版本开始，KafkaConsumer 就变为了双线程的设计
+	- 用户主线程：处理消息的逻辑是否采用多线程，完全由自己决定
+	- 心跳线程：负责定期检查主线程的阻塞情况，然后给协调者发送心跳请求（解耦）
+```
+
+- 多线程消费者的设计方案？   （**细化为实战重点**）
+
+> Java KafkaConsumer不是线程安全的
+
+```java
+方案一： 多线程 + 多KafkaCOnsumer实例
+    消费者程序启动多个线程，每个线程维护专属的 KafkaConsumer 实例，负责完整的消息获取、消息处理流程
+    优点：方便实现；速度快，五线程间交互开销；易于维护分区内的消费顺序
+    缺点：占用更多的系统资源；线程数受限于主题的分区数，拓展性差；线程自己处理消息很容易超时，从而引发rebalance
+    
+public class KafkaConsumerRunner implements Runnable {
+     private final AtomicBoolean closed = new AtomicBoolean(false);
+     private final KafkaConsumer consumer; // 这里的伪代码有些问题，没有创建对象啊
+
+     public void run() {
+         try {
+             consumer.subscribe(Arrays.asList("topic"));
+             while (!closed.get()) {
+      ConsumerRecords records = 
+        consumer.poll(Duration.ofMillis(10000));
+                 //  执行消息处理逻辑
+             }
+         } catch (WakeupException e) {
+             // Ignore exception if closing
+             if (!closed.get()) throw e;
+         } finally {
+             consumer.close();
+         }
+     }
+
+     // Shutdown hook which can be called from a separate thread
+     public void shutdown() {
+         closed.set(true);
+         consumer.wakeup();
+     }
+```
+
+![img](pic\consumer多线程 方案1.jpg)
+
+```java
+方案二： 单线程 + 单KafkaConsumer实例 + 消息处理Worker线程池
+     优点：可独立扩展消费获取线程数和Worker线程数，伸缩性好
+     缺点：实现难度高，难以维护分区内的消息消费顺序；处理链路拉长，不易于位移提交管理
+
+private final KafkaConsumer<String, String> consumer;
+private ExecutorService executors;
+...
+
+private int workerNum = ...;
+executors = new ThreadPoolExecutor(
+  workerNum, workerNum, 0L, TimeUnit.MILLISECONDS,
+  new ArrayBlockingQueue<>(1000), 
+  new ThreadPoolExecutor.CallerRunsPolicy());
+
+...
+while (true)  {
+  ConsumerRecords<String, String> records = 
+    consumer.poll(Duration.ofSeconds(1));
+  for (final ConsumerRecord record : records) {
+    executors.submit(new Worker(record));
+  }
+}
+..
+```
+
+<img src="pic\consumer多线程方案2.jpg" alt="img" style="zoom:50%;" />
 
 
 
+
+
+
+
+
+
+## 原理篇（三） 内核
+
+- 什么是副本？副本的好处？
+
+```markdown
+- 本质上是一个只能追加写信息的日志,每个分区配置有若干个副本
+
+- 提供数据冗余，保证数据持久性
+- 提高伸缩性，提高读的吞吐量（Kafka未提供）
+- 改善数据局部性（允许将数据放入与用户地理位置相近的地方，从而降低系统延时）
+```
+
+- 为什么追随者副本不对外提供服务？
+
+```markdown
+- Kafka在分区级别已经提高了伸缩性（吞吐量）
+
+- 为了保证 数据一致性
+	方便实现“Read-your-writes”，副本同步是异步的，因此有可能出现追随者副本还没有从领导者副本那里拉取到最新的消息，从而使得客户端看不到最新写入的消息
+	方便实现单调读（Monotonic Reads），不同副本的同步时间也不一样
+```
+
+- 什么是基于领导者（Leader-based）的副本机制？
+
+```markdown
+- 领导者副本（Leader Replica）
+	创建Topic时选取，领导者副本所在的 Broker 宕机时，开启新一轮的领导者选举
+	
+- 追随者副本（Follower Replica）	
+	不对外提供服务的，唯一的任务就是从领导者副本异步拉取消息，并写入到自己的日志中，从而实现与领导者副本的同步
+```
+
+<img src="pic\leader-follower.png" alt="image-20210618192721299" style="zoom: 25%;" />
+
+- 什么是ISR?
+
+```markdown
+- In-sync Replicas（ISR）：ISR 副本集合是与 Leader 同步的副本的集合
+```
+
+- 什么副本能够进入到 ISR 中呢？
+
+```markdown
+- Leader 副本天然就在 ISR 中
+
+- 判断 Follower 是否与 Leader 同步的标准，不是看相差的消息数, 是看Broker 端参数 replica.lag.time.max.ms 参数值,如果leader发现flower超过这个参数所设置的时间没有向它发起fech请求，那么虑将这个flower从ISR移除
+
+- 被剔除的副本追上了Leader的进度，是可以重新被加回ISR的
+```
+
+- 什么是Unclean leader的选举？
+
+```markdown
+- 既然 ISR 是可以动态调整的，那么自然就可以出现这样的情形：ISR 为空。因为 Leader 副本天然就在 ISR 中，如果 ISR 为空了，就说明 Leader 副本也“挂掉”了，Kafka 需要重新选举一个新的 Leader。
+
+- 通常来说，非同步副本落后 Leader 太多，如果选择这些副本作为新 Leader，就可能出现数据的丢失，因为其他副本会开始同步这个新的Leader
+
+- Broker 端参数 unclean.leader.election.enable 控制是否允许 Unclean 领导者选举
+	- 开启，可能会造成数据丢失，使得分区 Leader 副本一直存在，提高可用性
+	- 禁止，维护了数据的一致性，避免了消息丢失，但牺牲了高可用性
+	- 建议不要开启，为了这点儿高可用性的改善，牺牲了数据一致性，那就非常不值当了
+```
+
+- Kafka中请求的分类？
+
+```markdown
+- 所有的请求都是通过TCP以Socket的方式进行通讯的
+
+- 数据类请求:
+	PRODUCE 生产数据
+	FETCH   消费数据
+
+- 控制类请求
+	LeaderAndIsr  更新 Leader 副本、Follower 副本以及 ISR 集合
+	StopReplica   勒令副本下线
+	
+- 控制类请求可以直接令数据类请求失效。两类请求混合交替出现会有很多问题
+	 2.3 版本正式实现了数据类请求和控制类请求的分离, Broker 启动后，会在后台分别创建两套网络线程池和 IO 线程池的组合，它们分别处理数据类请求和控制类请求
+
+- 有个主题只有 1 个分区，该分区配置了两个副本，其中 Leader 副本保存在 Broker 0 上，Follower 副本保存在 Broker 1 上。假设 Broker 0 这台机器积压了很多的 PRODUCE 请求，此时你如果使用 Kafka 命令强制将该主题分区的 Leader、Follower 角色互换，那么 Kafka 内部的控制器组件（Controller）会发送 LeaderAndIsr 请求给 Broker 0，显式地告诉它，当前它不再是 Leader，而是 Follower 了，而 Broker 1 上的 Follower 副本因为被选为新的 Leader，因此停止向 Broker 0 拉取消息。这时，如果刚才积压的 PRODUCE 请求都设置了 acks=all，那么这些在 LeaderAndIsr 发送之前的请求就都无法正常完成了，它们会被暂存在 Purgatory 中不断重试，直到最终请求超时返回给客户端。
+```
+
+- 处理请求的方式？
+
+```markdown
+- 顺序处理请求：吞吐量差
+- 每个请求使用单独线程处理：创建和销毁线程耗费资源
+
+- Reactor模式
+
+	1. 当网络线程池拿到请求后，不自己处理，而是将请求放入到一个共享请求队列中。网络线程池默认是 3
+	2. IO 线程池负责从该队列中取出请求，执行真正的处理（如果是 PRODUCE 生产请求，则将消息写入到底层的磁盘日志中；如果是 FETCH 请求，则从磁盘或页缓存中读取消息）
+		num.io.threads 默认值是 8
+    3.	当 IO 线程处理完请求后，会将生成的响应发送到网络线程的响应队列中，然后由对应的网络线程负责将 Response 返还给客户端(请求队列是所有网络线程共享的，而响应队列则是每个网络线程专属的)
+```
+
+![image-20210618195337922](pic\请求处理.png)
+
+- 什么是Purgatory？
+
+```markdown
+- Kafka 中著名的“炼狱”组件
+
+- 缓存延时请求（Delayed Request，一时未满足条件不能立刻处理的请求）:比如设置了 acks=all 的 PRODUCE 请求，请求就必须等待 ISR 中所有副本都接收了消息后才能返回，此时处理该请求的 IO 线程就必须等待其他 Broker 的写入结果。
+
+- 当请求不能立刻处理时，它就会暂存在 Purgatory 中。稍后一旦满足了完成条件，IO 线程会继续处理该请求，并将 Response 放入对应网络线程的响应队列中。
+```
 
 
 
